@@ -1,0 +1,104 @@
+@RestResource(urlMapping='/line_callback')
+global with sharing class LineBotCallback {
+    private static final String channelSecret = 'xxx';
+    private static final String accessToken = 'xxx';
+ 
+    @httpPost
+    global static Map<String, String> doPost() {
+        RestRequest req = RestContext.request;
+        RestResponse res = RestContext.response;
+         
+        Map<String, Object> callbackParams = (Map<String, Object>)JSON.deserializeUntyped(req.requestBody.ToString());
+        List<Object> resultParams = (List<Object>)callbackParams.get('events');
+        String calculatedSignature = 
+            EncodingUtil.base64Encode(Crypto.generateMac('HmacSha256', req.requestBody, Blob.valueOf(channelSecret)));
+         
+        String signature = req.headers.get('X-Line-Signature');
+        if (calculatedSignature != signature) {
+            res.statusCode = 401;
+            return new Map<String, String> {
+                'result' => 'failure',
+                'description' => 'Error: Calculated signature is not different\n\ncalculated signature:'
+                                     + calculatedSignature + '\nrequest signature:' + signature
+            };
+        }
+         
+        List<String> questions = new List<String>{
+            'こんにち',
+            'ありがとう',
+            '教えて'
+        };
+        List<String> answers = new List<String>{
+            'こんにちわ',
+            'こちらこそ。いつでも話しかけてね！またね',
+            '何が知りたいの？写真を送ってよ'
+        };  
+
+        LineBotClient client = new LineBotClient(accessToken);        
+        for (Object obj : resultParams) {
+            Map<String, Object> params = (Map<String, Object>)obj;
+            String replyToken =  (String)params.get('replyToken');
+            Map<String, Object> contentParams = (Map<String, Object>)params.get('message');
+            
+            
+            String type = (String)contentParams.get('type');
+            //画像がポストされた時にはEinsteinに問い合わせ
+            if (type == 'image')
+            {
+	            String imageId = (String)contentParams.get('id');
+                String getImageURL = 'https://api.line.me/v2/bot/message/'+imageId+'/content';
+                HttpRequest reqest = new HttpRequest();
+                reqest.setHeader('Authorization', 'Bearer ' + accessToken);
+                reqest.setEndpoint(getImageURL);
+                reqest.setMethod('GET');
+                Http http = new Http();
+                HTTPResponse response = http.send(reqest);
+
+                JWT jwt = new JWT('RS256');
+                jwt.cert = 'Acme_Cert';
+                jwt.iss = 'developer.force.com';
+                jwt.sub = 'hyamase@salesforce.com';
+                jwt.aud = 'https://api.metamind.io/v1/oauth2/token';
+                jwt.exp = '3600';
+                String access_token = JWTBearerFlow.getAccessToken('https://api.metamind.io/v1/oauth2/token', jwt);
+        
+                List<Vision.Prediction> predis = Vision.predictBlob(response.getBodyAsBlob(), access_token, 'GeneralImageClassifier');
+        
+		        for (Vision.Prediction pred : predis) {
+                    Decimal prob = pred.probability*100;
+                    if (pred.label == 'notebook, notebook computer'){
+                        String debugBody = client.sendReplyTextImageMessage(replyToken, 'この商品はApple MacBook Airじゃよ。このリーフレットを見るといいぞ','https://c.ap2.content.force.com/servlet/servlet.ImageServer?id=01528000001vyCT&oid=00D28000001Ekki&lastMod=1477876978000', 'https://c.ap2.content.force.com/servlet/servlet.ImageServer?id=01528000001vyCT&oid=00D28000001Ekki&lastMod=1477876978000' ); 
+                    }else if (pred.label =='laptop, laptop computer'){
+                        String debugBody = client.sendReplyTextImageMessage(replyToken, 'この商品はApple MacBook Airじゃよ。このリーフレットを見るといいぞ','https://c.ap2.content.force.com/servlet/servlet.ImageServer?id=01528000001vyCT&oid=00D28000001Ekki&lastMod=1477876978000', 'https://c.ap2.content.force.com/servlet/servlet.ImageServer?id=01528000001vyCT&oid=00D28000001Ekki&lastMod=1477876978000' );
+                    }else{
+						String debugBody = client.sendReplyTextMessage(replyToken, 'この画像は'+prob.setScale(2)+'%の確率で'+pred.label+'じゃよ');
+                    } 
+        		}
+                
+            }
+            //テキストがポストされた時
+            if (type == 'text')
+            {
+                String message = (String)contentParams.get('text') ;
+                String debugBody = '';
+                if (message.contains(questions[0])) {
+                    debugBody = client.sendReplyTextMessage(replyToken,  answers[0]);
+                } else if (message.contains(questions[1])) {
+                    debugBody = client.sendReplyTextMessage(replyToken,  answers[1]);
+                } else if (message.contains(questions[2])) {
+                    debugBody = client.sendReplyTextMessage(replyToken, answers[2]);
+                } else{
+                    Integer i = Math.mod(Math.round(Math.random()*1000),21);
+                    if (i==0){i=1;}
+        			String stickerid = String.valueof(i);
+                    debugBody = client.sendReplySticker(replyToken,'1' ,stickerid);                    
+                }
+                System.debug(debugBody);
+        	}
+        }
+        return new Map<String, String>{
+            'result' => 'success'
+        };
+    }
+
+}
